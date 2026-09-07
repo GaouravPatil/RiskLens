@@ -14,4 +14,21 @@ export const getRisk = async (riskId) => {
     return response.data;
 };
 
+export const updateRiskStatus = async (riskId, status, reviewedBy) => {
+    const response = await api.patch(
+        `/api/risks/${riskId}/status`,
+        {
+            status,
+            reviewed_by: reviewedBy,
+        }
+    );
+
+    return response.data;
+};
+
+export const getRiskSummary = async () => {
+    const response = await api.get("/api/risks/summary");
+    return response.data;
+};
+
 export default api;
