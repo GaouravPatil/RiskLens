@@ -1,12 +1,16 @@
+from app.routes import risks
 from fastapi import FastAPI
 from app.routes.risks import router as risk_router
 from fastapi.middleware.cors import CORSMiddleware
+from app.routes import auth
 
 app = FastAPI(
     title="RiskLens API",
     description="Risk analytics and investigation API",
     version="1.0.0"
 )
+app.include_router(risks.router)
+app.include_router(auth.router)
 #CORS Middleware
 app.add_middleware(
     CORSMiddleware,

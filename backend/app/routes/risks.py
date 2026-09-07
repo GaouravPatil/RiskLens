@@ -1,12 +1,14 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from app.database import get_connection
+from app.dependencies import get_current_user, require_roles
 
 router = APIRouter(prefix="/api/risks", tags=["Risks"])
 
 ########## Risk all ##################
 @router.get("/")
 def get_risks(
+    current_user: dict = Depends(get_current_user),
     severity: str | None = None,
     status: str | None = None,
     min_score: float | None = None
@@ -64,7 +66,10 @@ def get_risks(
 ########## Summary ###########
 
 @router.get("/summary")
-def get_risk_summary():
+def get_risk_summary( 
+    
+    current_user: dict = Depends(get_current_user)
+):
     conn = get_connection()
 
     try:
@@ -131,63 +136,78 @@ class RiskStatusUpdate(BaseModel):
 @router.patch("/{risk_id}/status")
 def update_risk_status(
     risk_id: int,
-    update: RiskStatusUpdate
+    status: str,
+    reviewed_by: int,
+    current_user: dict = Depends(
+    require_roles("ADMIN", "RISK_ANALYST", "RISK_MANAGER")
+)
 ):
-    allowed_statuses = {
-        "open",
-        "investigating",
-        "resolved",
-        "false_positive"
-    }
-
-    if update.status not in allowed_statuses:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid risk status"
-        )
-
     conn = get_connection()
 
     try:
         with conn.cursor() as cur:
 
+            # 1. Get current status
             cur.execute("""
-                UPDATE risklens.risk_events
-                SET
-                    status = %s,
-                    reviewed_by = %s,
-                    reviewed_at = CURRENT_TIMESTAMP
+                SELECT status
+                FROM risklens.risk_events
                 WHERE risk_id = %s
-                RETURNING
-                    risk_id,
-                    risk_code,
-                    status,
-                    reviewed_by,
-                    reviewed_at
-            """, (
-                update.status,
-                update.reviewed_by,
-                risk_id
-            ))
+            """, (risk_id,))
 
             row = cur.fetchone()
 
             if not row:
-                conn.rollback()
-
                 raise HTTPException(
                     status_code=404,
                     detail="Risk event not found"
                 )
 
+            old_status = row[0]
+
+            # 2. Update status
+            cur.execute("""
+                UPDATE risklens.risk_events
+                SET
+                    status = %s,
+                    reviewed_by = %s
+                WHERE risk_id = %s
+                RETURNING
+                    risk_id,
+                    risk_code,
+                    entity_type,
+                    entity_id,
+                    risk_type,
+                    risk_score,
+                    severity,
+                    detected_at,
+                    status,
+                    ai_summary,
+                    reviewed_by
+            """, (status, reviewed_by, risk_id))
+
+            updated_row = cur.fetchone()
+
+            # 3. Create audit history
+            cur.execute("""
+                INSERT INTO risklens.risk_status_history (
+                    risk_id,
+                    old_status,
+                    new_status,
+                    reviewed_by
+                )
+                VALUES (%s, %s, %s, %s)
+            """, (
+                risk_id,
+                old_status,
+                status,
+                reviewed_by
+            ))
+
             conn.commit()
 
-            columns = [
-                desc[0]
-                for desc in cur.description
-            ]
+            columns = [desc[0] for desc in cur.description]
 
-            return dict(zip(columns, row))
+            return dict(zip(columns, updated_row))
 
     except Exception:
         conn.rollback()
@@ -199,7 +219,11 @@ def update_risk_status(
 ####RISK ID #######
 
 @router.get("/{risk_id}")
-def get_risk(risk_id: int):
+def get_risk(risk_id: int,
+  current_user: dict = Depends(get_current_user)
+):
+
+    
     conn = get_connection()
 
     try:

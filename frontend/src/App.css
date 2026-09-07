@@ -28,7 +28,7 @@ button {
 
 /* ================================
    Header
-   ================================ */
+   ================================*/
 
 header {
   margin-bottom: 36px;
@@ -759,4 +759,61 @@ main {
   color: #f8fafc;
   font-size: 14px;
   text-align: right;
+}
+
+/* ================================
+   Status Controls
+   ================================ */
+
+.status-controls {
+  margin-top: 28px;
+  padding: 20px;
+
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+}
+
+.status-controls h3 {
+  margin: 0 0 14px;
+
+  color: #f8fafc;
+  font-size: 16px;
+}
+
+.status-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.status-buttons button {
+  padding: 9px 16px;
+
+  background: #111827;
+  color: #94a3b8;
+
+  border: 1px solid #334155;
+  border-radius: 7px;
+
+  cursor: pointer;
+
+  font-size: 13px;
+  font-weight: 600;
+
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.status-buttons button:hover {
+  background: #1e293b;
+  color: #f8fafc;
+}
+
+.status-buttons button.active {
+  background: #172554;
+  color: #93c5fd;
+  border-color: #2563eb;
 }

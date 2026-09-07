@@ -56,25 +56,6 @@ function App() {
       setDetailLoading(false);
     }
   };
-
-  const openRisk = async (riskId) => {
-    try {
-      const response = await fetch(
-        `http://127.0.0.1:8000/api/risks/${riskId}`
-      );
-
-      if (!response.ok) {
-        throw new Error("Failed to fetch risk details");
-      }
-
-      const data = await response.json();
-
-      setSelectedRisk(data);
-    } catch (error) {
-      console.error("Error loading risk details:", error);
-    }
-  };
-
   const closeDetails = () => {
     setSelectedRisk(null);
   };
@@ -100,6 +81,39 @@ function App() {
       setError("Failed to update risk status");
     } finally {
       setUpdatingStatus(false);
+    }
+  };
+  const updateRiskStatus = async (status) => {
+    if (!selectedRisk) return;
+
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:8000/api/risks/${selectedRisk.risk_id}/status`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            status: status,
+            reviewed_by: "analyst",
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error("Failed to update risk status");
+      }
+
+      const updatedRisk = await response.json();
+
+      setSelectedRisk(updatedRisk);
+
+      // Refresh the risk list
+      await fetchRisks();
+
+    } catch (error) {
+      console.error("Error updating risk status:", error);
     }
   };
 
@@ -506,7 +520,41 @@ function App() {
                   {selectedRisk.entity_id}
                 </strong>
               </div>
+              <div className="status-controls">
+                <h3>Update Risk Status</h3>
 
+                <div className="status-buttons">
+                  <button
+                    className={selectedRisk.status === "open" ? "active" : ""}
+                    onClick={() => updateRiskStatus("open")}
+                  >
+                    Open
+                  </button>
+
+                  <button
+                    className={selectedRisk.status === "investigating" ? "active" : ""}
+                    onClick={() => updateRiskStatus("investigating")}
+                  >
+                    Investigating
+                  </button>
+
+                  <button
+                    className={selectedRisk.status === "resolved" ? "active" : ""}
+                    onClick={() => updateRiskStatus("resolved")}
+                  >
+                    Resolved
+                  </button>
+
+                  <button
+                    className={
+                      selectedRisk.status === "false_positive" ? "active" : ""
+                    }
+                    onClick={() => updateRiskStatus("false_positive")}
+                  >
+                    False Positive
+                  </button>
+                </div>
+              </div>
             </div>
 
             <div className="status-actions">
