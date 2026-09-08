@@ -2,8 +2,12 @@ import os
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
+from dotenv import load_dotenv
 from jose import JWTError, jwt
 
+
+# app.database also calls this, but auth must not depend on import order
+load_dotenv()
 
 SECRET_KEY = os.getenv(
     "JWT_SECRET_KEY",
@@ -11,7 +15,9 @@ SECRET_KEY = os.getenv(
 )
 
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
+ACCESS_TOKEN_EXPIRE_MINUTES = int(
+    os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60")
+)
 
 
 def hash_password(password: str) -> str:

@@ -1,9 +1,40 @@
-import { useEffect, useState } from "react";
-import { getRisks, getRisk, getRiskSummary, updateRiskStatus } from "./services/api";
+import { useCallback, useEffect, useState } from "react";
+import Login from "./components/Login";
+import {
+  getCurrentUser,
+  getRisk,
+  getRiskSummary,
+  getRisks,
+  getToken,
+  logout,
+  setUnauthorizedHandler,
+  updateRiskStatus,
+} from "./services/api";
+import { canUpdateStatus } from "./services/permissions";
 import "./App.css";
 
 
+const STATUS_OPTIONS = [
+  { value: "open", label: "Open" },
+  { value: "investigating", label: "Investigating" },
+  { value: "resolved", label: "Resolved" },
+  { value: "false_positive", label: "False Positive" },
+];
+
+const formatTimestamp = (value) =>
+  value ? new Date(value).toLocaleString() : "—";
+
+
 function App() {
+
+  /* ================================
+     Authentication state
+     ================================ */
+
+  const [user, setUser] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [sessionNotice, setSessionNotice] = useState("");
+
   const [risks, setRisks] = useState([]);
   const [summary, setSummary] = useState(null);
   const [selectedRisk, setSelectedRisk] = useState(null);
@@ -17,11 +48,13 @@ function App() {
   const [severityFilter, setSeverityFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
 
-  useEffect(() => {
-    loadRisks();
-  }, []);
+  const canUpdate = canUpdateStatus(user);
 
-  const loadRisks = async () => {
+  /* ================================
+     Data loading
+     ================================ */
+
+  const loadRisks = useCallback(async () => {
     try {
       setLoading(true);
       setError("");
@@ -35,10 +68,74 @@ function App() {
       setSummary(summaryData);
     } catch (err) {
       console.error(err);
-      setError("Failed to load dashboard data");
+
+      // A 401 is already handled by the interceptor, which returns to login
+      if (err.response?.status !== 401) {
+        setError("Failed to load dashboard data");
+      }
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  /* ================================
+     Session restore
+     ================================ */
+
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      setUser(null);
+      setSelectedRisk(null);
+      setSessionNotice("Your session expired. Please sign in again.");
+    });
+  }, []);
+
+  useEffect(() => {
+    const restoreSession = async () => {
+      if (!getToken()) {
+        setAuthChecked(true);
+        return;
+      }
+
+      try {
+        // Roles are re-read from the database rather than trusted from
+        // whatever is sitting in localStorage.
+        setUser(await getCurrentUser());
+      } catch (err) {
+        console.error(err);
+        logout();
+      } finally {
+        setAuthChecked(true);
+      }
+    };
+
+    restoreSession();
+  }, []);
+
+  useEffect(() => {
+    if (user) {
+      loadRisks();
+    }
+  }, [user, loadRisks]);
+
+  /* ================================
+     Handlers
+     ================================ */
+
+  const handleLogin = (loggedInUser) => {
+    setSessionNotice("");
+    setUser(loggedInUser);
+  };
+
+  const handleLogout = () => {
+    logout();
+
+    setUser(null);
+    setRisks([]);
+    setSummary(null);
+    setSelectedRisk(null);
+    setError("");
+    setSessionNotice("");
   };
 
   const handleRiskClick = async (riskId) => {
@@ -46,16 +143,18 @@ function App() {
       setDetailLoading(true);
       setError("");
 
-      const data = await getRisk(riskId);
-
-      setSelectedRisk(data);
+      setSelectedRisk(await getRisk(riskId));
     } catch (err) {
       console.error(err);
-      setError("Failed to load risk details");
+
+      if (err.response?.status !== 401) {
+        setError("Failed to load risk details");
+      }
     } finally {
       setDetailLoading(false);
     }
   };
+
   const closeDetails = () => {
     setSelectedRisk(null);
   };
@@ -63,59 +162,40 @@ function App() {
   const handleStatusUpdate = async (status) => {
     if (!selectedRisk) return;
 
+    const riskId = selectedRisk.risk_id;
+
     try {
       setUpdatingStatus(true);
       setError("");
 
-      const updatedRisk = await updateRiskStatus(
-        selectedRisk.risk_id,
-        status,
-        1
-      );
+      await updateRiskStatus(riskId, status);
 
-      setSelectedRisk(updatedRisk);
+      // Re-read the detail so evidence and the new history entry come back
+      setSelectedRisk(await getRisk(riskId));
 
       await loadRisks();
     } catch (err) {
       console.error(err);
-      setError("Failed to update risk status");
+
+      const responseStatus = err.response?.status;
+
+      if (responseStatus === 403) {
+        setError("Your role does not permit status updates.");
+      } else if (responseStatus === 400) {
+        setError(
+          err.response?.data?.detail ?? "That status change was rejected."
+        );
+      } else if (responseStatus !== 401) {
+        setError("Failed to update risk status");
+      }
     } finally {
       setUpdatingStatus(false);
     }
   };
-  const updateRiskStatus = async (status) => {
-    if (!selectedRisk) return;
 
-    try {
-      const response = await fetch(
-        `http://127.0.0.1:8000/api/risks/${selectedRisk.risk_id}/status`,
-        {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            status: status,
-            reviewed_by: "analyst",
-          }),
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error("Failed to update risk status");
-      }
-
-      const updatedRisk = await response.json();
-
-      setSelectedRisk(updatedRisk);
-
-      // Refresh the risk list
-      await fetchRisks();
-
-    } catch (error) {
-      console.error("Error updating risk status:", error);
-    }
-  };
+  /* ================================
+     Derived values
+     ================================ */
 
   const severityCounts = risks.reduce(
     (acc, risk) => {
@@ -135,10 +215,6 @@ function App() {
       low: 0,
     }
   );
-
-  const openCount = risks.filter(
-    (risk) => risk.status?.toLowerCase() === "open"
-  ).length;
 
   /* ================================
     Dashboard Metrics
@@ -174,6 +250,30 @@ function App() {
 
     return severityMatches && statusMatches;
   });
+
+  /* ================================
+     Authentication gate
+     ================================ */
+
+  if (!authChecked) {
+    return (
+      <div className="app">
+        <div className="loading">
+          Restoring session...
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <Login
+        onLogin={handleLogin}
+        notice={sessionNotice}
+      />
+    );
+  }
+
   if (loading) {
     return (
       <div className="app">
@@ -207,6 +307,29 @@ function App() {
         <div>
           <h1>RiskLens</h1>
           <p>Risk Monitoring Dashboard</p>
+        </div>
+
+        <div className="session">
+
+          <div className="session-user">
+            <strong>{user.full_name}</strong>
+
+            <div className="role-badges">
+              {(user.roles ?? []).map((role) => (
+                <span className="role-badge" key={role}>
+                  {role.replace("_", " ")}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <button
+            className="logout-button"
+            onClick={handleLogout}
+          >
+            Sign out
+          </button>
+
         </div>
       </header>
 
@@ -381,14 +504,12 @@ function App() {
               }
             >
               <option value="all">All Statuses</option>
-              <option value="open">Open</option>
-              <option value="investigating">
-                Investigating
-              </option>
-              <option value="resolved">Resolved</option>
-              <option value="false_positive">
-                False Positive
-              </option>
+
+              {STATUS_OPTIONS.map((option) => (
+                <option value={option.value} key={option.value}>
+                  {option.label}
+                </option>
+              ))}
             </select>
           </div>
 
@@ -491,6 +612,12 @@ function App() {
 
             </div>
 
+            {error && (
+              <div className="detail-error">
+                {error}
+              </div>
+            )}
+
             <div className="risk-summary">
 
               <div>
@@ -520,78 +647,41 @@ function App() {
                   {selectedRisk.entity_id}
                 </strong>
               </div>
-              <div className="status-controls">
-                <h3>Update Risk Status</h3>
 
-                <div className="status-buttons">
-                  <button
-                    className={selectedRisk.status === "open" ? "active" : ""}
-                    onClick={() => updateRiskStatus("open")}
-                  >
-                    Open
-                  </button>
-
-                  <button
-                    className={selectedRisk.status === "investigating" ? "active" : ""}
-                    onClick={() => updateRiskStatus("investigating")}
-                  >
-                    Investigating
-                  </button>
-
-                  <button
-                    className={selectedRisk.status === "resolved" ? "active" : ""}
-                    onClick={() => updateRiskStatus("resolved")}
-                  >
-                    Resolved
-                  </button>
-
-                  <button
-                    className={
-                      selectedRisk.status === "false_positive" ? "active" : ""
-                    }
-                    onClick={() => updateRiskStatus("false_positive")}
-                  >
-                    False Positive
-                  </button>
-                </div>
-              </div>
             </div>
 
-            <div className="status-actions">
+            {/* ================================
+                  Status Controls
+                  ================================ */}
+
+            <div className="status-controls">
               <h3>Update Risk Status</h3>
 
-              <div className="status-buttons">
-                <button
-                  onClick={() => handleStatusUpdate("open")}
-                  disabled={updatingStatus}
-                >
-                  Open
-                </button>
+              {canUpdate ? (
+                <>
+                  <div className="status-buttons">
+                    {STATUS_OPTIONS.map((option) => (
+                      <button
+                        key={option.value}
+                        className={
+                          selectedRisk.status === option.value ? "active" : ""
+                        }
+                        disabled={updatingStatus}
+                        onClick={() => handleStatusUpdate(option.value)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
 
-                <button
-                  onClick={() => handleStatusUpdate("investigating")}
-                  disabled={updatingStatus}
-                >
-                  Investigating
-                </button>
-
-                <button
-                  onClick={() => handleStatusUpdate("resolved")}
-                  disabled={updatingStatus}
-                >
-                  Resolved
-                </button>
-
-                <button
-                  onClick={() => handleStatusUpdate("false_positive")}
-                  disabled={updatingStatus}
-                >
-                  False Positive
-                </button>
-              </div>
-
-              {updatingStatus && (
-                <p>Updating risk...</p>
+                  {updatingStatus && (
+                    <p className="status-hint">Updating risk...</p>
+                  )}
+                </>
+              ) : (
+                <p className="status-hint">
+                  Your role has read-only access to risk events.
+                </p>
               )}
             </div>
 
@@ -603,6 +693,66 @@ function App() {
                 {selectedRisk.ai_summary ||
                   "No AI summary available."}
               </p>
+
+            </div>
+
+            {/* ================================
+                  Status History
+                  ================================ */}
+
+            <div className="history-section">
+
+              <h3>Status History</h3>
+
+              {!selectedRisk.status_history ||
+                selectedRisk.status_history.length === 0 ? (
+
+                <p className="status-hint">
+                  No status changes recorded yet.
+                </p>
+
+              ) : (
+
+                <ol className="timeline">
+
+                  {selectedRisk.status_history.map((entry) => (
+
+                    <li className="timeline-entry" key={entry.history_id}>
+
+                      <div className="timeline-transition">
+
+                        <span
+                          className={`status ${entry.old_status ?? ""}`}
+                        >
+                          {entry.old_status ?? "created"}
+                        </span>
+
+                        <span className="timeline-arrow">→</span>
+
+                        <span
+                          className={`status ${entry.new_status}`}
+                        >
+                          {entry.new_status}
+                        </span>
+
+                      </div>
+
+                      <p className="timeline-meta">
+                        {entry.reviewed_by_name ??
+                          (entry.reviewed_by
+                            ? `User #${entry.reviewed_by}`
+                            : "Unknown reviewer")}
+                        {" · "}
+                        {formatTimestamp(entry.changed_at)}
+                      </p>
+
+                    </li>
+
+                  ))}
+
+                </ol>
+
+              )}
 
             </div>
 

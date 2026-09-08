@@ -1,9 +1,22 @@
 from fastapi import APIRouter, HTTPException, Depends
+from psycopg2 import errors
 from pydantic import BaseModel
 from app.database import get_connection
-from app.dependencies import get_current_user, require_roles
+from app.dependencies import (
+    get_current_user,
+    get_current_user_id,
+    require_roles,
+)
 
 router = APIRouter(prefix="/api/risks", tags=["Risks"])
+
+# Mirrors the chk_risk_status constraint on risklens.risk_events
+ALLOWED_STATUSES = (
+    "open",
+    "investigating",
+    "resolved",
+    "false_positive",
+)
 
 ########## Risk all ##################
 @router.get("/")
@@ -129,19 +142,29 @@ def get_risk_summary(
 
 class RiskStatusUpdate(BaseModel):
     status: str
-    reviewed_by: int
 
 ########## RISK ID STATUS ###########
 
 @router.patch("/{risk_id}/status")
 def update_risk_status(
     risk_id: int,
-    status: str,
-    reviewed_by: int,
+    payload: RiskStatusUpdate,
+    reviewed_by: int = Depends(get_current_user_id),
     current_user: dict = Depends(
-    require_roles("ADMIN", "RISK_ANALYST", "RISK_MANAGER")
-)
+        require_roles("ADMIN", "RISK_ANALYST", "RISK_MANAGER")
+    )
 ):
+    status = payload.status
+
+    if status not in ALLOWED_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid status. Allowed values: "
+                + ", ".join(ALLOWED_STATUSES)
+            )
+        )
+
     conn = get_connection()
 
     try:
@@ -164,12 +187,13 @@ def update_risk_status(
 
             old_status = row[0]
 
-            # 2. Update status
+            # 2. Update status, attributing it to the authenticated user
             cur.execute("""
                 UPDATE risklens.risk_events
                 SET
                     status = %s,
-                    reviewed_by = %s
+                    reviewed_by = %s,
+                    reviewed_at = CURRENT_TIMESTAMP
                 WHERE risk_id = %s
                 RETURNING
                     risk_id,
@@ -182,9 +206,12 @@ def update_risk_status(
                     detected_at,
                     status,
                     ai_summary,
-                    reviewed_by
+                    reviewed_by,
+                    reviewed_at
             """, (status, reviewed_by, risk_id))
 
+            # Read the description before the INSERT below replaces it
+            columns = [desc[0] for desc in cur.description]
             updated_row = cur.fetchone()
 
             # 3. Create audit history
@@ -205,9 +232,14 @@ def update_risk_status(
 
             conn.commit()
 
-            columns = [desc[0] for desc in cur.description]
-
             return dict(zip(columns, updated_row))
+
+    except errors.ForeignKeyViolation:
+        conn.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail="Reviewer does not refer to an existing user"
+        )
 
     except Exception:
         conn.rollback()
@@ -240,7 +272,9 @@ def get_risk(risk_id: int,
                     re.severity,
                     re.detected_at,
                     re.status,
-                    re.ai_summary
+                    re.ai_summary,
+                    re.reviewed_by,
+                    re.reviewed_at
                 FROM risklens.risk_events re
                 WHERE re.risk_id = %s
             """, (risk_id,))
@@ -275,6 +309,29 @@ def get_risk(risk_id: int,
             risk["evidence"] = [
                 dict(zip(evidence_columns, evidence))
                 for evidence in evidence_rows
+            ]
+
+            cur.execute("""
+                SELECT
+                    h.history_id,
+                    h.old_status,
+                    h.new_status,
+                    h.reviewed_by,
+                    u.full_name AS reviewed_by_name,
+                    h.changed_at
+                FROM risklens.risk_status_history h
+                LEFT JOIN risklens.users u
+                    ON u.user_id = h.reviewed_by
+                WHERE h.risk_id = %s
+                ORDER BY h.changed_at DESC, h.history_id DESC
+            """, (risk_id,))
+
+            history_columns = [desc[0] for desc in cur.description]
+            history_rows = cur.fetchall()
+
+            risk["status_history"] = [
+                dict(zip(history_columns, entry))
+                for entry in history_rows
             ]
 
             return risk
