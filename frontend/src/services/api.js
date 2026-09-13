@@ -112,4 +112,36 @@ export const getRiskSummary = async () => {
     return response.data;
 };
 
+/* ================================
+   Simulation & Streaming Ingestion
+   ================================ */
+
+export const getSimulationStatus = async () => {
+    const response = await api.get("/api/simulation/status");
+    return response.data;
+};
+
+export const getSimulationFeed = async () => {
+    const response = await api.get("/api/simulation/feed");
+    return response.data;
+};
+
+export const startSimulation = async () => {
+    const response = await api.post("/api/simulation/start");
+    return response.data;
+};
+
+export const stopSimulation = async () => {
+    const response = await api.post("/api/simulation/stop");
+    return response.data;
+};
+
+export const triggerBatchGeneration = async (count = 20, anomalyRatio = 0.3) => {
+    const response = await api.post("/api/simulation/batch", {
+        count,
+        anomaly_ratio: anomalyRatio,
+    });
+    return response.data;
+};
+
 export default api;

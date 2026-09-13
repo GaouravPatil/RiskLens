@@ -7,6 +7,8 @@ import {
   RiskTimelineChart,
 } from "./components/AnalystCharts";
 import AuditFeed from "./components/AuditFeed";
+import StreamControl from "./components/StreamControl";
+import LiveActivityFeed from "./components/LiveActivityFeed";
 import {
   getCurrentUser,
   getRisk,
@@ -35,6 +37,7 @@ import {
   TrendingUp,
   AlertTriangle,
   CheckCircle2,
+  Zap,
 } from "lucide-react";
 import "./App.css";
 
@@ -60,7 +63,7 @@ export default function App() {
   const [updatingStatus, setUpdatingStatus] = useState(false);
 
   // Tab & Realtime controls
-  const [activeTab, setActiveTab] = useState("queue"); // 'queue' | 'analytics' | 'audit'
+  const [activeTab, setActiveTab] = useState("queue"); // 'queue' | 'stream' | 'analytics' | 'audit'
   const [autoPolling, setAutoPolling] = useState(true);
   const [lastSync, setLastSync] = useState(null);
 
@@ -94,7 +97,7 @@ export default function App() {
       if (err.response?.status !== 401) {
         setError("Failed to fetch real-time database risk feeds.");
       }
-    } fontinally: {
+    } finally {
       if (!isBackground) setLoading(false);
     }
   }, []);
@@ -283,6 +286,14 @@ export default function App() {
           </button>
 
           <button
+            className={`nav-tab-btn ${activeTab === "stream" ? "active" : ""}`}
+            onClick={() => setActiveTab("stream")}
+          >
+            <Zap size={16} className="text-amber-400" />
+            <span>Live Stream Feed</span>
+          </button>
+
+          <button
             className={`nav-tab-btn ${activeTab === "analytics" ? "active" : ""}`}
             onClick={() => setActiveTab("analytics")}
           >
@@ -336,6 +347,9 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="dashboard-main">
+        {/* Realtime Ingestion Control Panel */}
+        <StreamControl onDataInserted={() => loadRisks(true)} />
+
         {error && (
           <div className="glass-panel" style={{ borderColor: "var(--accent-rose)", color: "var(--accent-rose)", marginBottom: 20, display: "flex", alignItems: "center", gap: 10 }}>
             <AlertTriangle size={18} />
@@ -586,7 +600,17 @@ export default function App() {
           </>
         )}
 
-        {/* TAB 2: ANALYTICS & CHARTS */}
+        {/* TAB 2: LIVE STREAM FEED */}
+        {activeTab === "stream" && (
+          <LiveActivityFeed
+            onSelectRisk={(id) => {
+              handleRiskClick(id);
+              setActiveTab("queue");
+            }}
+          />
+        )}
+
+        {/* TAB 3: ANALYTICS & CHARTS */}
         {activeTab === "analytics" && (
           <div className="chart-matrix">
             <SeverityDonutChart
@@ -603,7 +627,7 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 3: AUDIT STREAM */}
+        {/* TAB 4: AUDIT STREAM */}
         {activeTab === "audit" && (
           <AuditFeed
             risks={risks}
