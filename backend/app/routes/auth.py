@@ -31,9 +31,7 @@ def _get_roles(cur, user_id: int) -> list[str]:
 @router.post("/login")
 @limiter.limit("5/minute")
 def login(request: Request, data: LoginRequest):
-    conn = get_connection()
-
-    try:
+    with get_connection() as conn:
         with conn.cursor() as cur:
 
             # 1. Find user
@@ -109,9 +107,6 @@ def login(request: Request, data: LoginRequest):
                     "roles": roles
                 }
             }
-
-    finally:
-        conn.close()
 
 
 @router.get("/me")

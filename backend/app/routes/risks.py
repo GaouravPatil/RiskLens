@@ -26,9 +26,7 @@ def get_risks(
     status: str | None = None,
     min_score: float | None = None
 ):
-    conn = get_connection()
-
-    try:
+    with get_connection() as conn:
         with conn.cursor() as cur:
 
             query = """
@@ -73,19 +71,14 @@ def get_risks(
                 for row in rows
             ]
 
-    finally:
-        conn.close()
 
 ########## Summary ###########
 
 @router.get("/summary")
 def get_risk_summary( 
-    
     current_user: dict = Depends(get_current_user)
 ):
-    conn = get_connection()
-
-    try:
+    with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT
@@ -137,8 +130,6 @@ def get_risk_summary(
 
             return dict(zip(columns, row))
 
-    finally:
-        conn.close()
 
 class RiskStatusUpdate(BaseModel):
     status: str
@@ -165,88 +156,78 @@ def update_risk_status(
             )
         )
 
-    conn = get_connection()
-
     try:
-        with conn.cursor() as cur:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
 
-            # 1. Get current status
-            cur.execute("""
-                SELECT status
-                FROM risklens.risk_events
-                WHERE risk_id = %s
-            """, (risk_id,))
+                # 1. Get current status
+                cur.execute("""
+                    SELECT status
+                    FROM risklens.risk_events
+                    WHERE risk_id = %s
+                """, (risk_id,))
 
-            row = cur.fetchone()
+                row = cur.fetchone()
 
-            if not row:
-                raise HTTPException(
-                    status_code=404,
-                    detail="Risk event not found"
-                )
+                if not row:
+                    raise HTTPException(
+                        status_code=404,
+                        detail="Risk event not found"
+                    )
 
-            old_status = row[0]
+                old_status = row[0]
 
-            # 2. Update status, attributing it to the authenticated user
-            cur.execute("""
-                UPDATE risklens.risk_events
-                SET
-                    status = %s,
-                    reviewed_by = %s,
-                    reviewed_at = CURRENT_TIMESTAMP
-                WHERE risk_id = %s
-                RETURNING
-                    risk_id,
-                    risk_code,
-                    entity_type,
-                    entity_id,
-                    risk_type,
-                    risk_score,
-                    severity,
-                    detected_at,
-                    status,
-                    ai_summary,
-                    reviewed_by,
-                    reviewed_at
-            """, (status, reviewed_by, risk_id))
+                # 2. Update status, attributing it to the authenticated user
+                cur.execute("""
+                    UPDATE risklens.risk_events
+                    SET
+                        status = %s,
+                        reviewed_by = %s,
+                        reviewed_at = CURRENT_TIMESTAMP
+                    WHERE risk_id = %s
+                    RETURNING
+                        risk_id,
+                        risk_code,
+                        entity_type,
+                        entity_id,
+                        risk_type,
+                        risk_score,
+                        severity,
+                        detected_at,
+                        status,
+                        ai_summary,
+                        reviewed_by,
+                        reviewed_at
+                """, (status, reviewed_by, risk_id))
 
-            # Read the description before the INSERT below replaces it
-            columns = [desc[0] for desc in cur.description]
-            updated_row = cur.fetchone()
+                # Read the description before the INSERT below replaces it
+                columns = [desc[0] for desc in cur.description]
+                updated_row = cur.fetchone()
 
-            # 3. Create audit history
-            cur.execute("""
-                INSERT INTO risklens.risk_status_history (
+                # 3. Create audit history
+                cur.execute("""
+                    INSERT INTO risklens.risk_status_history (
+                        risk_id,
+                        old_status,
+                        new_status,
+                        reviewed_by
+                    )
+                    VALUES (%s, %s, %s, %s)
+                """, (
                     risk_id,
                     old_status,
-                    new_status,
+                    status,
                     reviewed_by
-                )
-                VALUES (%s, %s, %s, %s)
-            """, (
-                risk_id,
-                old_status,
-                status,
-                reviewed_by
-            ))
+                ))
 
-            conn.commit()
-
-            return dict(zip(columns, updated_row))
+                return dict(zip(columns, updated_row))
 
     except errors.ForeignKeyViolation:
-        conn.rollback()
         raise HTTPException(
             status_code=400,
             detail="Reviewer does not refer to an existing user"
         )
 
-    except Exception:
-        conn.rollback()
-        raise
-
-    finally:
-        conn.close()
 
 ####RISK ID #######
 
@@ -254,11 +235,7 @@ def update_risk_status(
 def get_risk(risk_id: int,
   current_user: dict = Depends(get_current_user)
 ):
-
-    
-    conn = get_connection()
-
-    try:
+    with get_connection() as conn:
         with conn.cursor() as cur:
 
             cur.execute("""
@@ -335,6 +312,3 @@ def get_risk(risk_id: int,
             ]
 
             return risk
-
-    finally:
-        conn.close()

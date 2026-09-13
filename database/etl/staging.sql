@@ -5,6 +5,8 @@
 
 SET search_path TO risklens;
 
+CREATE SCHEMA IF NOT EXISTS staging;
+
 -- Remove old staging tables
 DROP TABLE IF EXISTS staging.access_logs_raw;
 DROP TABLE IF EXISTS staging.transactions_raw;

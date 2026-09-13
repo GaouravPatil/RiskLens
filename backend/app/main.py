@@ -16,10 +16,9 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-app.include_router(risks.router)
-app.include_router(auth.router)
-
-#CORS Middleware
+# CORS Middleware — registered before routers so Starlette wraps
+# them outermost and every response (including error responses
+# from validation or middleware) gets the correct CORS headers.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -27,6 +26,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(risks.router)
+app.include_router(auth.router)
 
 
 @app.get("/")

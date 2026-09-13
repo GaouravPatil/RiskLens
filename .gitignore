@@ -1,1 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.venv
+
+# Environment files
+.env
+.env.local
+.env.*.local
 backend/.env
+frontend/.env
+
+# Node / React
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+build/
+.npm
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Database & Generated Files
+*.csv
+data_generator/output/
+*.sqlite3
+*.db
+
+# IDE & OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

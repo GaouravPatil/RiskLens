@@ -1,5 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useMemo } from "react";
 import Login from "./components/Login";
+import {
+  SeverityDonutChart,
+  RiskScoreHistogram,
+  EntityBreakdownChart,
+  RiskTimelineChart,
+} from "./components/AnalystCharts";
+import AuditFeed from "./components/AuditFeed";
 import {
   getCurrentUser,
   getRisk,
@@ -11,8 +18,25 @@ import {
   updateRiskStatus,
 } from "./services/api";
 import { canUpdateStatus } from "./services/permissions";
+import {
+  ShieldAlert,
+  Activity,
+  Layers,
+  Search,
+  RefreshCw,
+  SlidersHorizontal,
+  Clock,
+  UserCheck,
+  Radio,
+  FileText,
+  X,
+  PieChart,
+  ChevronRight,
+  TrendingUp,
+  AlertTriangle,
+  CheckCircle2,
+} from "lucide-react";
 import "./App.css";
-
 
 const STATUS_OPTIONS = [
   { value: "open", label: "Open" },
@@ -21,16 +45,7 @@ const STATUS_OPTIONS = [
   { value: "false_positive", label: "False Positive" },
 ];
 
-const formatTimestamp = (value) =>
-  value ? new Date(value).toLocaleString() : "—";
-
-
-function App() {
-
-  /* ================================
-     Authentication state
-     ================================ */
-
+export default function App() {
   const [user, setUser] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [sessionNotice, setSessionNotice] = useState("");
@@ -41,22 +56,29 @@ function App() {
 
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
-
   const [error, setError] = useState("");
   const [updatingStatus, setUpdatingStatus] = useState(false);
 
+  // Tab & Realtime controls
+  const [activeTab, setActiveTab] = useState("queue"); // 'queue' | 'analytics' | 'audit'
+  const [autoPolling, setAutoPolling] = useState(true);
+  const [lastSync, setLastSync] = useState(null);
+
+  // Filters
+  const [searchTerm, setSearchTerm] = useState("");
   const [severityFilter, setSeverityFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [minScoreFilter, setMinScoreFilter] = useState(0);
 
   const canUpdate = canUpdateStatus(user);
 
   /* ================================
-     Data loading
+     Data Loading
      ================================ */
 
-  const loadRisks = useCallback(async () => {
+  const loadRisks = useCallback(async (isBackground = false) => {
     try {
-      setLoading(true);
+      if (!isBackground) setLoading(true);
       setError("");
 
       const [riskData, summaryData] = await Promise.all([
@@ -66,20 +88,19 @@ function App() {
 
       setRisks(riskData);
       setSummary(summaryData);
+      setLastSync(new Date());
     } catch (err) {
       console.error(err);
-
-      // A 401 is already handled by the interceptor, which returns to login
       if (err.response?.status !== 401) {
-        setError("Failed to load dashboard data");
+        setError("Failed to fetch real-time database risk feeds.");
       }
-    } finally {
-      setLoading(false);
+    } fontinally: {
+      if (!isBackground) setLoading(false);
     }
   }, []);
 
   /* ================================
-     Session restore
+     Session Restore
      ================================ */
 
   useEffect(() => {
@@ -96,10 +117,7 @@ function App() {
         setAuthChecked(true);
         return;
       }
-
       try {
-        // Roles are re-read from the database rather than trusted from
-        // whatever is sitting in localStorage.
         setUser(await getCurrentUser());
       } catch (err) {
         console.error(err);
@@ -108,15 +126,28 @@ function App() {
         setAuthChecked(true);
       }
     };
-
     restoreSession();
   }, []);
 
   useEffect(() => {
     if (user) {
-      loadRisks();
+      loadRisks(false);
     }
   }, [user, loadRisks]);
+
+  /* ================================
+     Real-Time Auto-Polling (5s)
+     ================================ */
+
+  useEffect(() => {
+    if (!user || !autoPolling) return;
+
+    const interval = setInterval(() => {
+      loadRisks(true);
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [user, autoPolling, loadRisks]);
 
   /* ================================
      Handlers
@@ -129,64 +160,47 @@ function App() {
 
   const handleLogout = () => {
     logout();
-
     setUser(null);
     setRisks([]);
     setSummary(null);
     setSelectedRisk(null);
     setError("");
-    setSessionNotice("");
   };
 
   const handleRiskClick = async (riskId) => {
     try {
       setDetailLoading(true);
       setError("");
-
       setSelectedRisk(await getRisk(riskId));
     } catch (err) {
       console.error(err);
-
       if (err.response?.status !== 401) {
-        setError("Failed to load risk details");
+        setError("Failed to load risk details.");
       }
     } finally {
       setDetailLoading(false);
     }
   };
 
-  const closeDetails = () => {
-    setSelectedRisk(null);
-  };
-
   const handleStatusUpdate = async (status) => {
     if (!selectedRisk) return;
-
     const riskId = selectedRisk.risk_id;
 
     try {
       setUpdatingStatus(true);
       setError("");
-
       await updateRiskStatus(riskId, status);
-
-      // Re-read the detail so evidence and the new history entry come back
       setSelectedRisk(await getRisk(riskId));
-
-      await loadRisks();
+      await loadRisks(true);
     } catch (err) {
       console.error(err);
-
-      const responseStatus = err.response?.status;
-
-      if (responseStatus === 403) {
+      const resStatus = err.response?.status;
+      if (resStatus === 403) {
         setError("Your role does not permit status updates.");
-      } else if (responseStatus === 400) {
-        setError(
-          err.response?.data?.detail ?? "That status change was rejected."
-        );
-      } else if (responseStatus !== 401) {
-        setError("Failed to update risk status");
+      } else if (resStatus === 400) {
+        setError(err.response?.data?.detail ?? "Status change rejected.");
+      } else if (resStatus !== 401) {
+        setError("Failed to update status.");
       }
     } finally {
       setUpdatingStatus(false);
@@ -194,621 +208,412 @@ function App() {
   };
 
   /* ================================
-     Derived values
+     Filtered Risks Computation
      ================================ */
 
-  const severityCounts = risks.reduce(
-    (acc, risk) => {
-      const severity = risk.severity?.toLowerCase();
-
-      if (severity === "critical") acc.critical++;
-      if (severity === "high") acc.high++;
-      if (severity === "medium") acc.medium++;
-      if (severity === "low") acc.low++;
-
-      return acc;
-    },
-    {
-      critical: 0,
-      high: 0,
-      medium: 0,
-      low: 0,
-    }
-  );
-
-  /* ================================
-    Dashboard Metrics
-    ================================ */
-
-  const totalRisks = summary?.total_risks ?? 0;
-  const criticalRisks = summary?.critical_risks ?? 0;
-  const highRisks = summary?.high_risks ?? 0;
-  const mediumRisks = summary?.medium_risks ?? 0;
-  const openRisks = summary?.open_risks ?? 0;
-  const averageRiskScore =
-    summary?.average_risk_score != null
-      ? Number(summary.average_risk_score).toFixed(1)
-      : "0.0";
+  const filteredRisks = useMemo(() => {
+    return risks.filter((r) => {
+      // Severity
+      if (severityFilter !== "all" && r.severity !== severityFilter) return false;
+      // Status
+      if (statusFilter !== "all" && r.status !== statusFilter) return false;
+      // Min score
+      if (r.risk_score < minScoreFilter) return false;
+      // Search term
+      if (searchTerm.trim()) {
+        const query = searchTerm.toLowerCase();
+        const code = (r.risk_code || "").toLowerCase();
+        const type = (r.risk_type || "").toLowerCase();
+        const entity = (r.entity_id || "").toLowerCase();
+        const summaryText = (r.ai_summary || "").toLowerCase();
+        return (
+          code.includes(query) ||
+          type.includes(query) ||
+          entity.includes(query) ||
+          summaryText.includes(query)
+        );
+      }
+      return true;
+    });
+  }, [risks, severityFilter, statusFilter, minScoreFilter, searchTerm]);
 
   /* ================================
-    Filtering
-    ================================ */
-
-  const maxSeverityCount = Math.max(
-    ...Object.values(severityCounts),
-    1
-  );
-
-  const filteredRisks = risks.filter((risk) => {
-    const severityMatches =
-      severityFilter === "all" ||
-      risk.severity === severityFilter;
-
-    const statusMatches =
-      statusFilter === "all" ||
-      risk.status === statusFilter;
-
-    return severityMatches && statusMatches;
-  });
-
-  /* ================================
-     Authentication gate
+     Render Loading / Login
      ================================ */
 
   if (!authChecked) {
     return (
-      <div className="app">
-        <div className="loading">
-          Restoring session...
+      <div className="app-container" style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ color: "var(--accent-cyan)", display: "flex", alignItems: "center", gap: 10 }}>
+          <RefreshCw className="spin" size={24} />
+          <span>Initializing RiskLens Control Center...</span>
         </div>
       </div>
     );
   }
 
   if (!user) {
-    return (
-      <Login
-        onLogin={handleLogin}
-        notice={sessionNotice}
-      />
-    );
-  }
-
-  if (loading) {
-    return (
-      <div className="app">
-        <div className="loading">
-          Loading risks...
-        </div>
-      </div>
-    );
-  }
-
-  if (error && !selectedRisk) {
-    return (
-      <div className="app">
-        <div className="error">
-          {error}
-        </div>
-      </div>
-    );
+    return <Login onLogin={handleLogin} noticeMessage={sessionNotice} />;
   }
 
   return (
-    <div className="app">
-
-
-
-      {/* ================================
-            Header
-            ================================ */}
-
-      <header>
-        <div>
-          <h1>RiskLens</h1>
-          <p>Risk Monitoring Dashboard</p>
+    <div className="app-container">
+      {/* App Header */}
+      <header className="app-header">
+        <div className="brand-section">
+          <div className="brand-logo">
+            <ShieldAlert size={22} />
+          </div>
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span className="brand-title">RiskLens</span>
+              <span className="brand-badge">Analyst Suite</span>
+            </div>
+          </div>
         </div>
 
-        <div className="session">
+        {/* Navigation Tabs */}
+        <nav className="nav-tabs">
+          <button
+            className={`nav-tab-btn ${activeTab === "queue" ? "active" : ""}`}
+            onClick={() => setActiveTab("queue")}
+          >
+            <ShieldAlert size={16} />
+            <span>Investigation Queue</span>
+          </button>
 
-          <div className="session-user">
-            <strong>{user.full_name}</strong>
+          <button
+            className={`nav-tab-btn ${activeTab === "analytics" ? "active" : ""}`}
+            onClick={() => setActiveTab("analytics")}
+          >
+            <PieChart size={16} />
+            <span>Analytics & Charts</span>
+          </button>
 
-            <div className="role-badges">
-              {(user.roles ?? []).map((role) => (
-                <span className="role-badge" key={role}>
-                  {role.replace("_", " ")}
-                </span>
-              ))}
-            </div>
+          <button
+            className={`nav-tab-btn ${activeTab === "audit" ? "active" : ""}`}
+            onClick={() => setActiveTab("audit")}
+          >
+            <Activity size={16} />
+            <span>Audit Feed</span>
+          </button>
+        </nav>
+
+        {/* Controls & Profile */}
+        <div className="header-controls">
+          <div
+            className={`live-polling-toggle ${autoPolling ? "active" : ""}`}
+            onClick={() => setAutoPolling(!autoPolling)}
+            title="Toggle 5-second automatic database refresh"
+          >
+            <span className="live-pulse-dot" />
+            <span>{autoPolling ? "LIVE AUTO-POLL" : "PAUSED"}</span>
           </div>
 
           <button
-            className="logout-button"
-            onClick={handleLogout}
+            className="chart-reset-btn"
+            onClick={() => loadRisks(false)}
+            style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px" }}
+            title="Fetch database risks immediately"
           >
-            Sign out
+            <RefreshCw size={14} className={loading ? "spin" : ""} />
+            <span>Sync</span>
           </button>
 
+          <div className="user-profile-badge">
+            <div className="user-avatar">{user.full_name?.charAt(0) || "U"}</div>
+            <div className="user-info">
+              <span className="user-name">{user.full_name}</span>
+              <span className="user-role">{user.role}</span>
+            </div>
+          </div>
+
+          <button className="btn-logout" onClick={handleLogout}>
+            Sign Out
+          </button>
         </div>
       </header>
 
-      <main>
-
-        {/* ================================
-              Metrics
-              ================================ */}
-
-        <section className="metrics">
-
-          <div className="metric-card">
-            <span>Total Risks</span>
-            <strong>{totalRisks}</strong>
+      {/* Main Content Area */}
+      <main className="dashboard-main">
+        {error && (
+          <div className="glass-panel" style={{ borderColor: "var(--accent-rose)", color: "var(--accent-rose)", marginBottom: 20, display: "flex", alignItems: "center", gap: 10 }}>
+            <AlertTriangle size={18} />
+            <span>{error}</span>
           </div>
+        )}
 
-          <div className="metric-card critical-metric">
-            <span>Critical</span>
-            <strong>{criticalRisks}</strong>
-          </div>
-
-          <div className="metric-card high-metric">
-            <span>High</span>
-            <strong>{highRisks}</strong>
-          </div>
-
-          <div className="metric-card medium-metric">
-            <span>Medium</span>
-            <strong>{mediumRisks}</strong>
-          </div>
-
-          <div className="metric-card open-metric">
-            <span>Open</span>
-            <strong>{openRisks}</strong>
-          </div>
-
-          <div className="metric-card">
-            <span>Average Score</span>
-            <strong>{averageRiskScore}</strong>
-          </div>
-
-        </section>
-
-        {/*==========Analytics===============*/}
-
-        <section className="analytics">
-          <div className="analytics-card">
-            <div className="analytics-header">
-              <div>
-                <h3>Risk Severity Distribution</h3>
-                <p>Current risk events by severity</p>
-              </div>
+        {/* Top Metric Cards (Global Overview) */}
+        <div className="metrics-grid">
+          <div className="glass-card metric-card" style={{ "--card-accent": "var(--accent-cyan)" }}>
+            <div className="metric-header">
+              <span>Total Risks Monitored</span>
+              <div className="metric-icon-wrapper"><ShieldAlert className="icon-cyan" size={18} /></div>
             </div>
+            <div className="metric-value">{summary?.total_risks ?? risks.length}</div>
+            <div className="metric-sub">Realtime PostgreSQL Feed</div>
+          </div>
 
-            <div className="severity-chart">
-              <div className="chart-row">
-                <span className="chart-label">Critical</span>
-
-                <div className="chart-track">
-                  <div
-                    className="chart-bar critical-bar"
-                    style={{
-                      width: `${(severityCounts.critical / maxSeverityCount) * 100}%`,
-                    }}
-                  />
-                </div>
-
-                <strong>{severityCounts.critical}</strong>
-              </div>
-
-              <div className="chart-row">
-                <span className="chart-label">High</span>
-
-                <div className="chart-track">
-                  <div
-                    className="chart-bar high-bar"
-                    style={{
-                      width: `${(severityCounts.high / maxSeverityCount) * 100}%`,
-                    }}
-                  />
-                </div>
-
-                <strong>{severityCounts.high}</strong>
-              </div>
-
-              <div className="chart-row">
-                <span className="chart-label">Medium</span>
-
-                <div className="chart-track">
-                  <div
-                    className="chart-bar medium-bar"
-                    style={{
-                      width: `${(severityCounts.medium / maxSeverityCount) * 100}%`,
-                    }}
-                  />
-                </div>
-
-                <strong>{severityCounts.medium}</strong>
-              </div>
-
-              <div className="chart-row">
-                <span className="chart-label">Low</span>
-
-                <div className="chart-track">
-                  <div
-                    className="chart-bar low-bar"
-                    style={{
-                      width: `${(severityCounts.low / maxSeverityCount) * 100}%`,
-                    }}
-                  />
-                </div>
-
-                <strong>{severityCounts.low}</strong>
-              </div>
+          <div className="glass-card metric-card" style={{ "--card-accent": "var(--accent-rose)" }}>
+            <div className="metric-header">
+              <span>Critical Severity</span>
+              <div className="metric-icon-wrapper"><AlertTriangle className="icon-rose" size={18} /></div>
             </div>
-          </div>
-        </section>
-
-        {/* ================================
-              Risk Events Header
-              ================================ */}
-
-        <div className="dashboard-header">
-
-          <div>
-            <h2>Risk Events</h2>
-
-            <p className="result-count">
-              Showing {filteredRisks.length} of {totalRisks} risks
-            </p>
+            <div className="metric-value" style={{ color: "var(--accent-rose)" }}>
+              {summary?.critical_risks ?? risks.filter((r) => r.severity === "critical").length}
+            </div>
+            <div className="metric-sub">Immediate Action Required</div>
           </div>
 
-          <button
-            className="refresh-button"
-            onClick={loadRisks}
-          >
-            Refresh
-          </button>
+          <div className="glass-card metric-card" style={{ "--card-accent": "var(--accent-purple)" }}>
+            <div className="metric-header">
+              <span>Active Open Cases</span>
+              <div className="metric-icon-wrapper"><Activity className="icon-purple" size={18} /></div>
+            </div>
+            <div className="metric-value" style={{ color: "var(--accent-purple)" }}>
+              {summary?.open_risks ?? risks.filter((r) => r.status === "open").length}
+            </div>
+            <div className="metric-sub">Pending Analyst Review</div>
+          </div>
 
+          <div className="glass-card metric-card" style={{ "--card-accent": "var(--accent-emerald)" }}>
+            <div className="metric-header">
+              <span>Avg Risk Score</span>
+              <div className="metric-icon-wrapper"><TrendingUp className="icon-emerald" size={18} /></div>
+            </div>
+            <div className="metric-value" style={{ color: "var(--accent-emerald)" }}>
+              {summary?.average_risk_score ?? "0.0"}
+            </div>
+            <div className="metric-sub">Across active threats</div>
+          </div>
         </div>
 
-        {/* ================================
-              Filters
-              ================================ */}
-
-        <section className="filters">
-
-          <div className="filter-group">
-            <label>Severity</label>
-
-            <select
-              value={severityFilter}
-              onChange={(e) =>
-                setSeverityFilter(e.target.value)
-              }
-            >
-              <option value="all">All Severities</option>
-              <option value="critical">Critical</option>
-              <option value="high">High</option>
-              <option value="medium">Medium</option>
-              <option value="low">Low</option>
-            </select>
-          </div>
-
-          <div className="filter-group">
-            <label>Status</label>
-
-            <select
-              value={statusFilter}
-              onChange={(e) =>
-                setStatusFilter(e.target.value)
-              }
-            >
-              <option value="all">All Statuses</option>
-
-              {STATUS_OPTIONS.map((option) => (
-                <option value={option.value} key={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <button
-            className="clear-filter"
-            onClick={() => {
-              setSeverityFilter("all");
-              setStatusFilter("all");
-            }}
-          >
-            Clear Filters
-          </button>
-
-        </section>
-
-        {/* ================================
-              Risk List
-              ================================ */}
-
-        {filteredRisks.length === 0 ? (
-          <div className="empty">
-            No risks match the selected filters.
-          </div>
-        ) : (
-          <div className="risk-list">
-
-            {filteredRisks.map((risk) => (
-
-              <div
-                className="risk-card clickable"
-                key={risk.risk_id}
-                onClick={() =>
-                  handleRiskClick(risk.risk_id)
-                }
-              >
-
-                <div>
-                  <h3>{risk.risk_code}</h3>
-
-                  <p>
-                    {risk.risk_type} · Entity #{risk.entity_id}
-                  </p>
-                </div>
-
-                <div className="risk-score">
-                  <strong>{risk.risk_score}</strong>
-                  <span>Score</span>
-                </div>
-
-                <div
-                  className={`severity ${risk.severity}`}
-                >
-                  {risk.severity}
-                </div>
-
-                <div
-                  className={`status ${risk.status}`}
-                >
-                  {risk.status}
-                </div>
-
+        {/* TAB 1: INVESTIGATION QUEUE */}
+        {activeTab === "queue" && (
+          <>
+            {/* Search & Filter Toolbar */}
+            <div className="toolbar-panel">
+              <div className="search-box">
+                <Search size={16} className="search-icon" />
+                <input
+                  type="text"
+                  className="search-input"
+                  placeholder="Search by risk code, entity ID, threat type, summary..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                />
               </div>
 
-            ))}
+              <div className="filter-group">
+                <select
+                  className="filter-select"
+                  value={severityFilter}
+                  onChange={(e) => setSeverityFilter(e.target.value)}
+                >
+                  <option value="all">All Severities</option>
+                  <option value="critical">Critical Only</option>
+                  <option value="high">High Only</option>
+                  <option value="medium">Medium Only</option>
+                  <option value="low">Low Only</option>
+                </select>
 
-          </div>
-        )}
+                <select
+                  className="filter-select"
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                >
+                  <option value="all">All Statuses</option>
+                  <option value="open">Open</option>
+                  <option value="investigating">Investigating</option>
+                  <option value="resolved">Resolved</option>
+                  <option value="false_positive">False Positive</option>
+                </select>
 
-        {/* ================================
-              Loading Detail
-              ================================ */}
-
-        {detailLoading && (
-          <div className="detail-panel">
-            Loading risk details...
-          </div>
-        )}
-
-        {/* ================================
-              Risk Detail
-              ================================ */}
-
-        {selectedRisk && !detailLoading && (
-
-          <div className="detail-panel">
-
-            <div className="detail-header">
-
-              <div>
-                <h2>{selectedRisk.risk_code}</h2>
-
-                <p>
-                  {selectedRisk.risk_type}
-                </p>
+                <select
+                  className="filter-select"
+                  value={minScoreFilter}
+                  onChange={(e) => setMinScoreFilter(Number(e.target.value))}
+                >
+                  <option value={0}>Min Score: Any</option>
+                  <option value={50}>Min Score: 50+</option>
+                  <option value={75}>Min Score: 75+</option>
+                  <option value={90}>Min Score: 90+</option>
+                </select>
               </div>
-
-              <button onClick={closeDetails}>
-                Close
-              </button>
-
             </div>
 
-            {error && (
-              <div className="detail-error">
-                {error}
-              </div>
-            )}
-
-            <div className="risk-summary">
-
-              <div>
-                <span>Risk Score</span>
-                <strong>
-                  {selectedRisk.risk_score}
-                </strong>
-              </div>
-
-              <div>
-                <span>Severity</span>
-                <strong>
-                  {selectedRisk.severity}
-                </strong>
-              </div>
-
-              <div>
-                <span>Status</span>
-                <strong>
-                  {selectedRisk.status}
-                </strong>
-              </div>
-
-              <div>
-                <span>Entity</span>
-                <strong>
-                  {selectedRisk.entity_id}
-                </strong>
-              </div>
-
-            </div>
-
-            {/* ================================
-                  Status Controls
-                  ================================ */}
-
-            <div className="status-controls">
-              <h3>Update Risk Status</h3>
-
-              {canUpdate ? (
-                <>
-                  <div className="status-buttons">
-                    {STATUS_OPTIONS.map((option) => (
-                      <button
-                        key={option.value}
-                        className={
-                          selectedRisk.status === option.value ? "active" : ""
-                        }
-                        disabled={updatingStatus}
-                        onClick={() => handleStatusUpdate(option.value)}
+            {/* Split View: Risks List + Detail Drawer */}
+            <div className={`workspace-grid ${selectedRisk ? "has-detail" : ""}`}>
+              <div className="risk-table-container">
+                {filteredRisks.length === 0 ? (
+                  <div className="glass-card" style={{ textAlign: "center", padding: "48px 0", color: "var(--text-dim)" }}>
+                    <ShieldAlert size={36} style={{ marginBottom: 12 }} />
+                    <p>No risk events match the current filter criteria.</p>
+                  </div>
+                ) : (
+                  filteredRisks.map((risk) => {
+                    const isSelected = selectedRisk?.risk_id === risk.risk_id;
+                    return (
+                      <div
+                        key={risk.risk_id}
+                        className={`risk-item-card ${isSelected ? "selected" : ""}`}
+                        onClick={() => handleRiskClick(risk.risk_id)}
                       >
-                        {option.label}
-                      </button>
+                        <div className="risk-main-info">
+                          <div className={`score-badge severity-${risk.severity}`}>
+                            {Math.round(risk.risk_score)}
+                          </div>
+                          <div className="risk-details-col">
+                            <div className="risk-code-title">
+                              <span className="risk-code">{risk.risk_code}</span>
+                              <span className="risk-type-tag">
+                                {risk.risk_type?.replace(/_/g, " ")}
+                              </span>
+                            </div>
+                            <div className="risk-entity-row">
+                              <span>Entity: <strong>{risk.entity_type} ({risk.entity_id})</strong></span>
+                              <span>•</span>
+                              <span>Detected: {new Date(risk.detected_at).toLocaleString()}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                          <span className={`status-badge badge-${risk.status}`}>
+                            {risk.status?.replace("_", " ")}
+                          </span>
+                          <ChevronRight size={18} className="icon-muted" />
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              {/* Detail Panel */}
+              {selectedRisk && (
+                <div className="glass-card detail-panel">
+                  <div className="detail-header">
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                        <span className="risk-code" style={{ fontSize: 18 }}>{selectedRisk.risk_code}</span>
+                        <span className={`severity-tag severity-${selectedRisk.severity}`}>
+                          {selectedRisk.severity}
+                        </span>
+                      </div>
+                      <span className="risk-type-tag" style={{ fontSize: 13 }}>
+                        {selectedRisk.risk_type?.replace(/_/g, " ")}
+                      </span>
+                    </div>
+
+                    <button className="btn-close-detail" onClick={() => setSelectedRisk(null)}>
+                      <X size={16} />
+                    </button>
+                  </div>
+
+                  {/* Analyst Status Control */}
+                  <div className="status-controls-section">
+                    <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)" }}>
+                      UPDATE INVESTIGATION STATUS
+                    </span>
+                    {!canUpdate ? (
+                      <span style={{ fontSize: 12, color: "var(--accent-amber)" }}>
+                        Your role ({user.role}) is read-only.
+                      </span>
+                    ) : (
+                      <div className="status-btn-group">
+                        {STATUS_OPTIONS.map((opt) => (
+                          <button
+                            key={opt.value}
+                            disabled={updatingStatus}
+                            className={`status-option-btn ${selectedRisk.status === opt.value ? "active" : ""}`}
+                            onClick={() => handleStatusUpdate(opt.value)}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* AI Summary */}
+                  {selectedRisk.ai_summary && (
+                    <div className="glass-panel">
+                      <span style={{ fontSize: 12, fontWeight: 600, color: "var(--accent-cyan)", display: "block", marginBottom: 6 }}>
+                        AI RISK ASSESSMENT
+                      </span>
+                      <p style={{ fontSize: 12, color: "var(--text-main)", lineHeight: "1.5" }}>
+                        {selectedRisk.ai_summary}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Evidence Items */}
+                  <div>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", display: "block", marginBottom: 10 }}>
+                      INSPECTED EVIDENCE & METRICS ({selectedRisk.evidence?.length || 0})
+                    </span>
+                    {selectedRisk.evidence?.map((ev) => (
+                      <div key={ev.evidence_id} className="evidence-card">
+                        <div className="evidence-header">
+                          <span className="evidence-type">{ev.evidence_type}</span>
+                          <span className="evidence-value">{ev.metric_name}: {ev.metric_value}</span>
+                        </div>
+                        <div className="evidence-desc">{ev.description}</div>
+                      </div>
                     ))}
                   </div>
 
-                  {updatingStatus && (
-                    <p className="status-hint">Updating risk...</p>
-                  )}
-                </>
-              ) : (
-                <p className="status-hint">
-                  Your role has read-only access to risk events.
-                </p>
-              )}
-            </div>
-
-            <div className="ai-summary">
-
-              <h3>AI Summary</h3>
-
-              <p>
-                {selectedRisk.ai_summary ||
-                  "No AI summary available."}
-              </p>
-
-            </div>
-
-            {/* ================================
-                  Status History
-                  ================================ */}
-
-            <div className="history-section">
-
-              <h3>Status History</h3>
-
-              {!selectedRisk.status_history ||
-                selectedRisk.status_history.length === 0 ? (
-
-                <p className="status-hint">
-                  No status changes recorded yet.
-                </p>
-
-              ) : (
-
-                <ol className="timeline">
-
-                  {selectedRisk.status_history.map((entry) => (
-
-                    <li className="timeline-entry" key={entry.history_id}>
-
-                      <div className="timeline-transition">
-
-                        <span
-                          className={`status ${entry.old_status ?? ""}`}
-                        >
-                          {entry.old_status ?? "created"}
+                  {/* Status History */}
+                  <div>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", display: "block", marginBottom: 10 }}>
+                      AUDIT HISTORY
+                    </span>
+                    {selectedRisk.status_history?.map((h) => (
+                      <div key={h.history_id} style={{ fontSize: 11, padding: "6px 0", borderBottom: "1px solid rgba(255,255,255,0.05)", display: "flex", justifyContent: "space-between" }}>
+                        <span>
+                          {h.old_status || "open"} → <strong>{h.new_status}</strong> by {h.reviewed_by_name || `U${h.reviewed_by}`}
                         </span>
-
-                        <span className="timeline-arrow">→</span>
-
-                        <span
-                          className={`status ${entry.new_status}`}
-                        >
-                          {entry.new_status}
+                        <span style={{ color: "var(--text-dim)" }}>
+                          {new Date(h.changed_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </span>
-
                       </div>
-
-                      <p className="timeline-meta">
-                        {entry.reviewed_by_name ??
-                          (entry.reviewed_by
-                            ? `User #${entry.reviewed_by}`
-                            : "Unknown reviewer")}
-                        {" · "}
-                        {formatTimestamp(entry.changed_at)}
-                      </p>
-
-                    </li>
-
-                  ))}
-
-                </ol>
-
-              )}
-
-            </div>
-
-            <div className="evidence-section">
-
-              <h3>Risk Evidence</h3>
-
-              {!selectedRisk.evidence ||
-                selectedRisk.evidence.length === 0 ? (
-
-                <p>No evidence available.</p>
-
-              ) : (
-
-                <div className="evidence-list">
-
-                  {selectedRisk.evidence.map((item) => (
-
-                    <div
-                      className="evidence-card"
-                      key={item.evidence_id}
-                    >
-
-                      <div>
-
-                        <strong>
-                          {item.metric_name}
-                        </strong>
-
-                        <p>
-                          {item.description}
-                        </p>
-
-                      </div>
-
-                      <div className="evidence-value">
-                        {item.metric_value}
-                      </div>
-
-                    </div>
-
-                  ))}
-
+                    ))}
+                  </div>
                 </div>
-
               )}
-
             </div>
-
-          </div>
-
+          </>
         )}
 
+        {/* TAB 2: ANALYTICS & CHARTS */}
+        {activeTab === "analytics" && (
+          <div className="chart-matrix">
+            <SeverityDonutChart
+              risks={risks}
+              activeFilter={severityFilter}
+              onSelectSeverity={(sev) => {
+                setSeverityFilter(sev);
+                setActiveTab("queue");
+              }}
+            />
+            <RiskScoreHistogram risks={risks} />
+            <EntityBreakdownChart risks={risks} />
+            <RiskTimelineChart risks={risks} />
+          </div>
+        )}
+
+        {/* TAB 3: AUDIT STREAM */}
+        {activeTab === "audit" && (
+          <AuditFeed
+            risks={risks}
+            onSelectRisk={(id) => {
+              handleRiskClick(id);
+              setActiveTab("queue");
+            }}
+          />
+        )}
       </main>
     </div>
   );
 }
-
-export default App;

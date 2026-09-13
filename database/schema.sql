@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS users (
     phone VARCHAR(20),
     department VARCHAR(100),
     home_location VARCHAR(100),
+    password_hash VARCHAR(255),
     status VARCHAR(20) NOT NULL DEFAULT 'active',
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -245,3 +246,33 @@ CREATE TABLE IF NOT EXISTS user_roles (
         REFERENCES roles(role_id)
         ON DELETE CASCADE
 );
+
+
+-- ============================================================
+-- 9. RISK STATUS HISTORY
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS risk_status_history (
+    history_id BIGSERIAL PRIMARY KEY,
+
+    risk_id BIGINT NOT NULL,
+
+    old_status VARCHAR(20),
+    new_status VARCHAR(20) NOT NULL,
+
+    reviewed_by BIGINT,
+
+    changed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_risk_status_history_risk
+        FOREIGN KEY (risk_id)
+        REFERENCES risk_events(risk_id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT fk_risk_status_history_reviewer
+        FOREIGN KEY (reviewed_by)
+        REFERENCES users(user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_risk_status_history_risk
+    ON risk_status_history (risk_id, changed_at DESC);
