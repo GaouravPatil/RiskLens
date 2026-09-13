@@ -9,10 +9,25 @@ from jose import JWTError, jwt
 # app.database also calls this, but auth must not depend on import order
 load_dotenv()
 
-SECRET_KEY = os.getenv(
-    "JWT_SECRET_KEY",
-    "risklens-development-secret-change-this"
-)
+APP_ENV = os.getenv("APP_ENV", "development")
+
+_DEV_SECRET_FALLBACK = "risklens-development-secret-change-this"
+_JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+
+if not _JWT_SECRET_KEY:
+    if APP_ENV == "development":
+        _JWT_SECRET_KEY = _DEV_SECRET_FALLBACK
+    else:
+        # Refuse to start with a guessable secret outside dev. A missing
+        # JWT_SECRET_KEY in staging/production is a config bug, not
+        # something to silently paper over with a public fallback.
+        raise RuntimeError(
+            "JWT_SECRET_KEY must be set when APP_ENV is not 'development'. "
+            "Generate one with: python -c \"import secrets; "
+            "print(secrets.token_hex(32))\""
+        )
+
+SECRET_KEY = _JWT_SECRET_KEY
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(

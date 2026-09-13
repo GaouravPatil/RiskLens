@@ -1,9 +1,10 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
 
 from app.database import get_connection
 from app.auth import verify_password, create_access_token
 from app.dependencies import get_current_user_id
+from app.limiter import limiter
 
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
@@ -28,7 +29,8 @@ def _get_roles(cur, user_id: int) -> list[str]:
 
 
 @router.post("/login")
-def login(data: LoginRequest):
+@limiter.limit("5/minute")
+def login(request: Request, data: LoginRequest):
     conn = get_connection()
 
     try:
