@@ -5,7 +5,7 @@ from slowapi.errors import RateLimitExceeded
 
 from app.config import ALLOWED_ORIGINS
 from app.limiter import limiter
-from app.routes import auth, risks
+from app.routes import auth, risks, simulation
 
 app = FastAPI(
     title="RiskLens API",
@@ -29,6 +29,7 @@ app.add_middleware(
 
 app.include_router(risks.router)
 app.include_router(auth.router)
+app.include_router(simulation.router)
 
 
 @app.get("/")
